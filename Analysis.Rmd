@@ -1,0 +1,128 @@
+---
+title: "Activity Recognition of Weight Lifting Exercises"
+author: "Bharathwaj Sundaresan"
+date: "2/28/2021"
+output: html_document
+---
+
+## Executive Summary
+The goal of this project is to predict the manner in which a particular exercise is done. Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. We will be to use data from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants.They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. This project tends to investigate "how (well)" an activity was performed by the wearer.
+
+## The Dataset
+The dataset for this project is sourced from the research paper on [Qualitative Activity Recognition of Weight Lifting Exercises](http://web.archive.org/web/20170519033209/http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf). The data is extracted using an accelerometer to measure motion, force-sensing resistors to measure forces on the skier’s feet and a gyroscope to measure rotation.
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Data Source: [Training](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) , [Test](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+## Exploratory Data Analysis
+Lets load the data and do some exploratory plots.
+```{r, echo = TRUE}
+set.seed(12345)
+training<-read.csv("data/pml-training.csv")
+testCases<-read.csv("data/pml-testing.csv")
+
+dim(training)
+```
+The entire training data has 160 columns describing the accelerometer readings for 4 different locations (belt, forearm, arm, and dumbbell).
+Each location has 38 attributes which define that location. 
+
+Before plotting the attributes, Its also observed that the data set has many `na` and blank values which does not help in our assessment. These data points needs to be imputed, or ignored based on its relation to our outcome (class).
+
+Lets look at the records which have more than one NA counts.
+
+```{r, echo = TRUE, warning=FALSE, message=FALSE}
+c<-training
+c[ ,c("new_window","user_name","num_window","raw_timestamp_part_1","raw_timestamp_part_2","cvtd_timestamp","classe", "X")] <- list(NULL)
+c<-data.frame(lapply(c, function(x) as.numeric(as.character(x))))
+c<-cbind(training[c("classe")], c)
+
+k<-data.frame(sapply(c, function(x) sum(is.na(x))))
+k<-cbind(Column = rownames(k), k)
+rownames(k)<-1:nrow(k)
+colnames(k) = c("Column", "Null Counts")
+nulls<-k[k$`Null Counts` !=0,]
+rownames(nulls)<-1:nrow(nulls)
+r<-nrow(nulls)
+avg<-as.integer(sum(nulls$`Null Counts`)/nrow(nulls))
+tail(nulls)
+
+```
+
+From the above output, we can see that there are `r r` attributes which have NA records, averaging around `r avg` across all attributes. 
+Upon checking all the attributes with na records. Most of the data points related to Euler's angle measurements (pitch, roll, yaw) have been reported as NULL.
+As more than 95% of data is missing. Imputing does not help here. Lets ignore these attributes from our analysis.
+
+```{r, echo = TRUE, warning=FALSE, message=FALSE}
+library(caret)
+Final_data<-training[k[k$`Null Counts` ==0,]$Column]
+part<-createDataPartition(Final_data$classe, p = 0.7, list = FALSE)
+train<-Final_data[part,]
+test<-Final_data[-part,]
+dim(train)
+dim(test)
+```
+After removing 100 attributes related to Euler's measurements and the initial timestamp measurements. We have a dataset of 53 columns and 19622 rows.
+This is divided to get a training data of 13737 rows and testing data of 5885 rows.
+
+Based on the original research paper.Lets do some exploratory plots comparing the accelerometer, gyroscope and magnetometer readings for each class by each user on the original data.
+
+1.Belt Accelerometer average of vectors vs Class for each user_name
+```{r, echo = TRUE, warning=FALSE, message=FALSE}
+library(ggplot2)
+qplot(classe, (accel_belt_x + accel_belt_y + accel_belt_z)/3, data = training, color = user_name)
+```
+
+2.Gyroscope average of vectors vs Class for each user_name
+```{r, echo = TRUE}
+qplot(classe, (gyros_belt_x + gyros_belt_y + gyros_belt_z)/3, data = training, color = user_name)
+```
+
+3.Magnetometer average of vectors vs Class for each user_name
+```{r, echo = TRUE}
+qplot(classe, (magnet_belt_x + magnet_belt_y + magnet_belt_z)/3, data = training, color = user_name)
+```
+
+By averaging the vectors, we can see a clear distinction in readings for each user. 
+Based on the data source, The class "A" is the right way to do the exercise. The remaining classes contribute to the intended noise. The similar trend is also observed for the readings from other locations. 
+
+## Feature Selection and Model Build
+
+Based on the exploratory plots. We can see the data points have a characteristic noise in the sensor readings. Let us compare the efficiency of the Decision Tree model and the Random Forest model. 
+
+1. Decision Tree
+```{r, echo = TRUE, warning=FALSE, message=FALSE}
+library(rpart)
+dtree<-rpart(classe~., data = train, method = "class")
+pr_dtree<-predict(dtree, newdata = test, type = "class")
+cnfnmtrx<-confusionMatrix(pr_dtree, factor(test$classe))
+cnfnmtrx
+```
+The overall accuracy of the model is 73%. However it has failed to identify few classes correctly.
+
+Let us try to build a model using `Random Forest`
+
+2. Random Forest
+```{r, echo = TRUE}
+#Train control to define the K-folds. I have used 4 considering for bias and variance
+tr<-trainControl(method = "cv", number = 3, verboseIter = FALSE)
+rand<-train(classe~., data = train, method = "rf", trControl = tr)
+rand$finalModel
+```
+
+ With the characteristic noise in the data. Random Forest has been able to fix the overfit done in decision trees to the training data. The number of correctly predicted rows from the out-of-bag samples are also averaging around 0.7%
+
+Lets calculate the confusion Matrix on Test data using this model.
+```{r, echo = TRUE}
+pr_rand<-predict(rand, newdata = test)
+cf_rand<-confusionMatrix(pr_rand, factor(test$classe))
+cf_rand
+```
+
+Random Forest model has performed better with 99% accuracy, this gives a better prediction compared to the decision tree. Resulting in an accuracy of 99%. Lets select this model to predict the test case data points.
+
+## Predict Test cases using select Model
+```{r, echo = TRUE}
+pr_test_case<-predict(rand, newdata = testCases)
+pr_test_case
+```
